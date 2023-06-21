@@ -51,10 +51,13 @@ public class App extends Application {
 
     private MediaPlayer player;
     private MediaView mediaView;
+    private MediaModel currentMedia;
 
     private FileChooser fileChooser;
-    private ObservableList<MediaModel> playlist;
-    TableView<MediaModel> tableView;
+    private ObservableList<MediaModel> playlist;   
+    private ObservableList<MediaModel> alreadyPlay;
+
+    private TableView<MediaModel> tableView;
 
     private Button pauseButton;
     private Button stopButton;
@@ -66,7 +69,11 @@ public class App extends Application {
     private Slider sliderVolume;
     private Slider progressBar;
 
-    VBox bottomLayout;
+    private VBox bottomLayout;
+
+    private boolean singleLoop;
+    private boolean globalLoop;
+    private boolean shuffleMode;
 
     @Override
     public void start(Stage primatyStage) throws IOException {
@@ -78,10 +85,12 @@ public class App extends Application {
         fileChooser.getExtensionFilters().addAll(Constants.getExtensionFilter());
 
         playlist = FXCollections.observableArrayList();
+        alreadyPlay = FXCollections.observableArrayList();
 
         // Layout
         rootLayout = new BorderPane();
-        rootLayout.setStyle("-fx-background-color: black");
+        rootLayout.setStyle("-fx-background-color: black");   
+        rootLayout.setCenter(getImage("icon.png"));
 
         // Global
         createTopMenuBar();
@@ -131,7 +140,63 @@ public class App extends Application {
         return new ImageView(img);
     }
 
-    private void initPlayer(Media media) {
+    public void playShuffle(){
+        if (playlist.size() > 0) {
+            int index = -1;
+
+            if(!globalLoop){
+                ObservableList<MediaModel> notYetPlay = FXCollections.observableArrayList();
+                notYetPlay = playlist.filtered((media) -> {
+                    return !alreadyPlay.contains(media);
+                });
+
+                index = (int) (Math.random() * notYetPlay.size());
+            } else {
+                index = (int) (Math.random() * playlist.size());
+
+                if(index == playlist.indexOf(currentMedia)){
+                    index = (int) (Math.random() * playlist.size());
+                }
+            }
+
+            MediaModel mediaModel = playlist.get(index);
+            initPlayer(mediaModel);
+        }
+    }
+
+    public void playNext(){
+        if (playlist.size() > 0) {
+            int index = playlist.indexOf(currentMedia);
+            if (index < playlist.size() - 1) {
+                MediaModel mediaModel = playlist.get(index + 1);
+                initPlayer(mediaModel);
+            }else {
+                if (globalLoop) {
+                    MediaModel mediaModel = playlist.get(0);
+                    initPlayer(mediaModel);
+                }
+            }
+        }
+    }
+
+    public void playPrevious(){
+        if (playlist.size() > 0) {
+            int index = playlist.indexOf(currentMedia);
+            if (index > 0) {
+                MediaModel mediaModel = playlist.get(index - 1);
+                initPlayer(mediaModel);
+            }
+        }
+    }
+
+    private void initPlayer(MediaModel mediaModel) {
+        currentMedia = mediaModel;
+        alreadyPlay.add(currentMedia);
+        stage.setTitle("Media Player - " + mediaModel.getFileName());
+        tableView.getSelectionModel().select(mediaModel);
+
+        Media media = new Media(mediaModel.getPath());
+
         if (player != null) {
             player.dispose();
         }
@@ -172,6 +237,17 @@ public class App extends Application {
             pauseButton.setDisable(true);
             stopButton.setDisable(true);
             progressBar.setValue(0);
+        
+            if (singleLoop) {
+                player.seek(Duration.ZERO);
+                player.play();
+            } else if (globalLoop) {
+                playNext();
+            } else if (shuffleMode) {
+                playShuffle();
+            } else {
+                playNext();
+            }
         });
 
         player.currentTimeProperty()
@@ -182,8 +258,12 @@ public class App extends Application {
 
         mediaView = new MediaView(player);
         updateViewsSize();
-
-        rootLayout.setCenter(mediaView);
+        
+        if(mediaModel.getFileName().endsWith(".mp3") || mediaModel.getFileName().endsWith(".m4a")){
+            rootLayout.setCenter(getImage("icon.png"));
+        } else {
+            rootLayout.setCenter(mediaView);
+        } 
     }
 
     private void openFile() {
@@ -193,13 +273,17 @@ public class App extends Application {
 
         if (file != null) {
             try {
-                Media media = new Media(file.toURI().toASCIIString());
+                
                 MediaModel model  = new MediaModel(playlist.size() + 1, file.getName());
                 model.setPath(file.toURI().toASCIIString());
                 model.setSize(file.getTotalSpace() / 100 / 1024 / 1024 / 1024);
+
+                Media media = new Media(file.toURI().toASCIIString());
                 model.setDuration(media.getDuration().toString());
+
                 playlist.add(model);
-                initPlayer(media);
+
+                initPlayer(model);
             } catch (Exception ex) {
                 log(ex.getMessage());
             }
@@ -214,14 +298,16 @@ public class App extends Application {
         if (listFiles != null && !listFiles.isEmpty()) {
             try{
                 for (File file : listFiles) {
-                    Media media = new Media(file.toURI().toASCIIString());
                     MediaModel model  = new MediaModel(playlist.size() + 1, file.getName());
                     model.setPath(file.toURI().toASCIIString());
                     model.setSize(file.getTotalSpace() / 100/ 1024 / 1024 / 1024);
+
+                    Media media = new Media(file.toURI().toASCIIString());
                     model.setDuration(media.getDuration().toString());
+
                     playlist.add(model);
                 }
-                initPlayer(new Media(playlist.get(0).getPath()));
+                initPlayer(playlist.get(0));
             } catch (Exception ex) {
                 log(ex.getMessage());
             }
@@ -231,7 +317,7 @@ public class App extends Application {
 
     private void creationTableView() {
 
-        tableView = new TableView<>();
+        tableView = new TableView<MediaModel>();
 
         TableColumn<MediaModel, String> numberColumn = new TableColumn<>("#");
         numberColumn.setCellValueFactory(new PropertyValueFactory<>("id"));
@@ -258,8 +344,7 @@ public class App extends Application {
         tableView.setOnMouseClicked(e -> {
             if (e.getClickCount() == 2) {
                 MediaModel mediaModel = tableView.getSelectionModel().getSelectedItem();
-                Media media = new Media(mediaModel.getPath());
-                initPlayer(media);
+                initPlayer(mediaModel);
             }
         });
     }
@@ -290,22 +375,20 @@ public class App extends Application {
         Button nextButton = new Button();
         nextButton.setGraphic(getImage("next.png"));
         nextButton.setOnAction(e -> {
-            int index = playlist.indexOf(tableView.getSelectionModel().getSelectedItem());
-            if (index < playlist.size() - 1) {
-                MediaModel mediaModel = playlist.get(index + 1);
-                Media media = new Media(mediaModel.getPath());
-                initPlayer(media);
+            if (shuffleMode) {
+                playShuffle();
+            } else {
+                playNext();
             }
         });
 
         Button previousButton = new Button();
         previousButton.setGraphic(getImage("previous.png"));
         previousButton.setOnAction(e -> {
-            int index = playlist.indexOf(tableView.getSelectionModel().getSelectedItem());
-            if (index > 0) {
-                MediaModel mediaModel = playlist.get(index - 1);
-                Media media = new Media(mediaModel.getPath());
-                initPlayer(media);
+            if (shuffleMode) {
+                playShuffle();
+            } else {
+                playPrevious();
             }
         });
 
@@ -338,14 +421,16 @@ public class App extends Application {
         sliderVolume = new Slider();
         sliderVolume.valueProperty()
                 .addListener((ObservableValue<? extends Number> observable, Number oldValue, Number newValue) -> {
-                    player.setVolume(sliderVolume.getValue() / 100.0);
+                    if(player != null){
+                        player.setVolume(sliderVolume.getValue() / 100.0);
+                    }
                 });
 
         // ProgresBar
         progressBar = new Slider();
         progressBar.valueProperty()
                 .addListener((ObservableValue<? extends Number> observable, Number oldValue, Number newValue) -> {
-                    if (progressBar.isPressed()) {
+                    if (player != null && progressBar.isPressed()) {
                         player.seek(player.getTotalDuration().multiply(progressBar.getValue() / 100.0));
                     }
                 });
@@ -371,7 +456,7 @@ public class App extends Application {
         MenuBar menuBar = new MenuBar();
 
         // Media Menu
-        Menu media = new Menu("Media");
+        Menu mediaMenu = new Menu("Media");
 
         MenuItem openFile = new MenuItem("Open File");
         openFile.setOnAction(e -> openFile());
@@ -382,8 +467,51 @@ public class App extends Application {
         MenuItem quit = new MenuItem("Quit");
         quit.setOnAction(e -> Platform.exit());
 
-        media.getItems().addAll(openFile, openFiles, quit);
+        mediaMenu.getItems().addAll(openFile, openFiles, quit);
         // End Media Menu
+
+        // Options Menu
+        Menu optionMenu = new Menu("Options");
+        singleLoop = false;
+        globalLoop = false;
+        shuffleMode = false;
+
+        MenuItem singleLoopItem = new MenuItem("Single Loop");
+        singleLoopItem.setOnAction(e -> {
+            if (singleLoop){
+                singleLoop = false;
+                singleLoopItem.setText("Single Loop");
+            } else{
+                singleLoop = true;
+                singleLoopItem.setText("Desactivate Single Loop");
+            }
+        });
+
+        MenuItem globalLoopItem = new MenuItem("Loop");
+        globalLoopItem.setOnAction(e -> {
+            if (globalLoop){
+                singleLoop = false;
+                globalLoopItem.setText("Loop");
+            } else{
+                globalLoop = true;
+                globalLoopItem.setText("Desactivate Loop");
+            }
+        });
+
+        MenuItem shuffleItem = new MenuItem("Shuffle");
+        shuffleItem.setOnAction(e -> {
+            if (shuffleMode){
+                shuffleMode = false;
+                alreadyPlay.clear();
+                shuffleItem.setText("Shuffle");
+            } else{
+                shuffleMode = true;
+                shuffleItem.setText("Desactivate Shuffle");
+            }
+        });
+
+        optionMenu.getItems().addAll(singleLoopItem, globalLoopItem, shuffleItem);
+        // End Option Menu
 
         // Video
         Menu viewMenu = new Menu("View");
@@ -400,10 +528,12 @@ public class App extends Application {
         MenuItem fllScreen = new MenuItem("Full Screen (CTR+F)");
         fllScreen.setOnAction(e -> {
             stage.setFullScreen(true);
+            updateViewsSize();
         });
         MenuItem normalScreen = new MenuItem("Normal Screen (CTR+N)");
         normalScreen.setOnAction(e -> {
             stage.setFullScreen(false);
+            updateViewsSize();
         });
 
         viewMenu.getItems().addAll(playlistItem, mediItem, new SeparatorMenuItem(), fllScreen, normalScreen);
@@ -421,8 +551,8 @@ public class App extends Application {
         });
         bgr.setGraphic(colorPicker);
 
-        Menu help = new Menu("Author");
-        help.getItems().addAll(
+        Menu authorMenu = new Menu("Author");
+        authorMenu.getItems().addAll(
             new MenuItem("Aliano CHARLES"),            
             new MenuItem("Berthin PIERRISTAL"),
             new MenuItem("Mackendy ALEXIS"),
@@ -430,7 +560,7 @@ public class App extends Application {
             new MenuItem("Louis Midson LAJEANTY"),
             new MenuItem("Rolbert APHAON")
         );
-        menuBar.getMenus().addAll(media, viewMenu, settingsMenu, help);
+        menuBar.getMenus().addAll(mediaMenu, optionMenu, viewMenu, settingsMenu, authorMenu);
         rootLayout.setTop(menuBar);
     }
 
