@@ -6,30 +6,39 @@ import java.util.List;
 
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.beans.value.ObservableValue;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
+import javafx.scene.control.Button;
 import javafx.scene.control.Alert.AlertType;
 import javafx.scene.control.ColorPicker;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuBar;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.control.Slider;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.cell.PropertyValueFactory;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.Background;
 import javafx.scene.layout.BackgroundFill;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.CornerRadii;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.VBox;
 import javafx.scene.media.Media;
 import javafx.scene.media.MediaPlayer;
 import javafx.scene.media.MediaView;
 import javafx.scene.paint.Color;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
+import javafx.util.Duration;
 
 /**
  * JavaFX App
@@ -39,25 +48,59 @@ public class App extends Application {
     private Stage stage;
     private Scene scene;
     private BorderPane rootLayout;
+
     private MediaPlayer player;
+    private MediaView mediaView;
+
     private FileChooser fileChooser;
     private ObservableList<MediaModel> playlist;
+    TableView<MediaModel> tableView;
+
+    private Button pauseButton;
+    private Button stopButton;
+    private Button playButton;
+    private Button muteButton;
+    private Button unmuteButton;
+    private boolean endOfMedia;
+
+    private Slider sliderVolume;
+    private Slider progressBar;
+
+    VBox bottomLayout;
 
     @Override
     public void start(Stage primatyStage) throws IOException {
         stage = primatyStage;
         stage.setTitle("Media Player");
+        stage.getIcons().add(getImage("icon.png").getImage());
 
         fileChooser = new FileChooser();
         fileChooser.getExtensionFilters().addAll(Constants.getExtensionFilter());
 
         playlist = FXCollections.observableArrayList();
 
+        // Layout
         rootLayout = new BorderPane();
-        scene = new Scene(rootLayout, 640, 480);
+        rootLayout.setStyle("-fx-background-color: black");
 
         // Global
         createTopMenuBar();
+        createBottomActionBar();
+        creationTableView();
+
+        // Scene
+        scene = new Scene(rootLayout, 640, 480);
+        
+        scene.widthProperty()
+                .addListener((ObservableValue<? extends Number> observable, Number oldValue, Number newValue) -> {
+                    updateViewsSize();
+                });
+
+        scene.heightProperty()
+                .addListener((ObservableValue<? extends Number> observable, Number oldValue, Number newValue) -> {
+                    updateViewsSize();
+                });
+        updateViewsSize();
 
         stage.setScene(scene);
         stage.show();
@@ -74,12 +117,73 @@ public class App extends Application {
         System.out.println(message);
     }
 
-    private void setPlayer(MediaPlayer mediaPlayer) {
-        player = mediaPlayer;
-        player.setAutoPlay(true);
+    public void updateViewsSize() {
+        if (player != null) {
+            mediaView.setFitWidth(scene.getWidth());
+            mediaView.setFitHeight(scene.getHeight() - bottomLayout.getHeight() - 100);
+        }
+        tableView.setPrefWidth(scene.getWidth());
+        tableView.setPrefHeight(scene.getHeight() - bottomLayout.getHeight());
+    }
 
-        MediaView view = new MediaView(player);
-        rootLayout.setCenter(view);
+    public ImageView getImage(String image) {
+        Image img = new Image(getClass().getResourceAsStream(image));
+        return new ImageView(img);
+    }
+
+    private void initPlayer(Media media) {
+        if (player != null) {
+            player.dispose();
+        }
+
+        player = new MediaPlayer(media);
+        sliderVolume.setValue(50);
+
+        player.setAutoPlay(true);
+        endOfMedia = false;
+
+        player.setOnReady(() -> {
+            playButton.setDisable(false);
+            pauseButton.setDisable(true);
+            stopButton.setDisable(true);
+        });
+
+        player.setOnPlaying(() -> {
+            playButton.setDisable(true);
+            pauseButton.setDisable(false);
+            stopButton.setDisable(false);
+        });
+
+        player.setOnPaused(() -> {
+            playButton.setDisable(false);
+            pauseButton.setDisable(true);
+            stopButton.setDisable(false);
+        });
+
+        player.setOnStopped(() -> {
+            playButton.setDisable(false);
+            pauseButton.setDisable(true);
+            stopButton.setDisable(true);
+        });
+
+        player.setOnEndOfMedia(() -> {
+            endOfMedia = true;
+            playButton.setDisable(false);
+            pauseButton.setDisable(true);
+            stopButton.setDisable(true);
+            progressBar.setValue(0);
+        });
+
+        player.currentTimeProperty()
+                .addListener((ObservableValue<? extends Duration> observable, Duration oldValue, Duration newValue) -> {
+                    double progress = newValue.toSeconds() / player.getTotalDuration().toSeconds();
+                    progressBar.setValue(progress * 100);
+                });
+
+        mediaView = new MediaView(player);
+        updateViewsSize();
+
+        rootLayout.setCenter(mediaView);
     }
 
     private void openFile() {
@@ -90,8 +194,12 @@ public class App extends Application {
         if (file != null) {
             try {
                 Media media = new Media(file.toURI().toASCIIString());
-                setPlayer(new MediaPlayer(media));
-
+                MediaModel model  = new MediaModel(playlist.size() + 1, file.getName());
+                model.setPath(file.toURI().toASCIIString());
+                model.setSize(file.getTotalSpace() / 100 / 1024 / 1024 / 1024);
+                model.setDuration(media.getDuration().toString());
+                playlist.add(model);
+                initPlayer(media);
             } catch (Exception ex) {
                 log(ex.getMessage());
             }
@@ -104,17 +212,26 @@ public class App extends Application {
         List<File> listFiles = fileChooser.showOpenMultipleDialog(stage);
 
         if (listFiles != null && !listFiles.isEmpty()) {
-            for (File file : listFiles) {
-                playlist.add(new MediaModel(listFiles.indexOf(file) + 1, file.getName()));
+            try{
+                for (File file : listFiles) {
+                    Media media = new Media(file.toURI().toASCIIString());
+                    MediaModel model  = new MediaModel(playlist.size() + 1, file.getName());
+                    model.setPath(file.toURI().toASCIIString());
+                    model.setSize(file.getTotalSpace() / 100/ 1024 / 1024 / 1024);
+                    model.setDuration(media.getDuration().toString());
+                    playlist.add(model);
+                }
+                initPlayer(new Media(playlist.get(0).getPath()));
+            } catch (Exception ex) {
+                log(ex.getMessage());
             }
-
-            creationTableView();
+            
         }
     }
 
     private void creationTableView() {
 
-        TableView<MediaModel> tableView = new TableView<>();
+        tableView = new TableView<>();
 
         TableColumn<MediaModel, String> numberColumn = new TableColumn<>("#");
         numberColumn.setCellValueFactory(new PropertyValueFactory<>("id"));
@@ -124,121 +241,130 @@ public class App extends Application {
         TableColumn<MediaModel, String> fileNameColumn = new TableColumn<>("Name");
         fileNameColumn.setCellValueFactory(new PropertyValueFactory<>("fileName"));
 
+        TableColumn<MediaModel, String> durationColumn = new TableColumn<>("Duration");
+        durationColumn.setCellValueFactory(new PropertyValueFactory<>("duration"));
+
+        TableColumn<MediaModel, String> sizeColumn = new TableColumn<>("Size");
+        sizeColumn.setCellValueFactory(new PropertyValueFactory<>("size"));
+
         tableView.setItems(playlist);
 
         tableView.getColumns().add(numberColumn);
-        tableView.getColumns().add(fileNameColumn);
-        tableView.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        tableView.getColumns().add(fileNameColumn);        
+        tableView.getColumns().add(durationColumn);
+        tableView.getColumns().add(sizeColumn);
 
-        rootLayout.setLeft(tableView);
+        tableView.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        tableView.setOnMouseClicked(e -> {
+            if (e.getClickCount() == 2) {
+                MediaModel mediaModel = tableView.getSelectionModel().getSelectedItem();
+                Media media = new Media(mediaModel.getPath());
+                initPlayer(media);
+            }
+        });
     }
 
-    // void createBottomActionBar() {
+    void createBottomActionBar() {
+        playButton = new Button();
+        playButton.setDisable(true);
+        playButton.setGraphic(getImage("play.png"));
+        playButton.setOnAction(e -> {
+            if (endOfMedia) {
+                player.stop();
+                player.seek(player.getStartTime());
+            }
+            player.play();
+            endOfMedia = false;
+        });
 
-    // Image playImage = new Image(getClass().getResourceAsStream("play.png"));
-    // Image pauseImage = new Image(getClass().getResourceAsStream("pause.png"));
+        pauseButton = new Button();
+        pauseButton.setDisable(true);
+        pauseButton.setGraphic(getImage("pause.png"));
+        pauseButton.setOnAction(e -> player.pause());
 
-    // btnPlay_Pause.setGraphic(new ImageView(image_btnPlay_Pause));
-    // btnPlay_Pause.setOnAction(e -> {
-    // if (playerState == false) {
-    // btnPlay_Pause.setGraphic());
-    // if (player != null) {
-    // playerState = !playerState;
-    // player.play();
-    // System.out.println("you've been clicked in play btn ");
-    // }
+        stopButton = new Button();
+        stopButton.setDisable(true);
+        stopButton.setGraphic(getImage("stop.png"));
+        stopButton.setOnAction(e -> player.stop());
 
-    // } else {
+        Button nextButton = new Button();
+        nextButton.setGraphic(getImage("next.png"));
+        nextButton.setOnAction(e -> {
+            int index = playlist.indexOf(tableView.getSelectionModel().getSelectedItem());
+            if (index < playlist.size() - 1) {
+                MediaModel mediaModel = playlist.get(index + 1);
+                Media media = new Media(mediaModel.getPath());
+                initPlayer(media);
+            }
+        });
 
-    // btnPlay_Pause.setGraphic(new ImageView(new
-    // Image(getClass().getResourceAsStream("play.png"))));
-    // if (player != null) {
-    // playerState = !playerState;
-    // player.pause();
-    // }
-    // }
-    // });
-    // Button btn_Previous = new Button();
-    // btn_Previous.setGraphic(new ImageView(new
-    // Image(getClass().getResourceAsStream("previous.png"))));
-    // btn_Previous.setOnAction(e -> {
-    // if (player != null) {
-    // System.out.println("you've been clicked in previous btn ");
-    // }
-    // });
+        Button previousButton = new Button();
+        previousButton.setGraphic(getImage("previous.png"));
+        previousButton.setOnAction(e -> {
+            int index = playlist.indexOf(tableView.getSelectionModel().getSelectedItem());
+            if (index > 0) {
+                MediaModel mediaModel = playlist.get(index - 1);
+                Media media = new Media(mediaModel.getPath());
+                initPlayer(media);
+            }
+        });
 
-    // Button btn_stop = new Button();
-    // btn_stop.setGraphic(new ImageView(new
-    // Image(getClass().getResourceAsStream("stop.png"))));
-    // btn_stop.setOnAction(e -> {
-    // if (player != null) {
-    // player.stop();
-    // btnPlay_Pause.setGraphic(new ImageView(new
-    // Image(getClass().getResourceAsStream("play.png"))));
+        HBox controlePPS = new HBox(3);
+        controlePPS.getChildren().addAll(playButton, pauseButton, stopButton);
 
-    // System.out.println("you've been clicked in stop btn ");
-    // }
-    // });
+        HBox controlePN = new HBox(3);
+        controlePN.getChildren().addAll(previousButton, nextButton);
 
-    // Button btn_next = new Button();
-    // btn_next.setGraphic(new ImageView(new
-    // Image(getClass().getResourceAsStream("next.png"))));
-    // btn_next.setOnAction(e -> {
-    // if (player != null) {
-    // System.out.println("you've been clicked in next btn ");
-    // }
-    // });
+        HBox controleButtons = new HBox(10);
+        controleButtons.getChildren().addAll(controlePPS, controlePN);
 
-    // Button btnMute_unMute = new Button();
-    // btnMute_unMute.setGraphic(new ImageView(new
-    // Image(getClass().getResourceAsStream("audio.png"))));
-    // btnMute_unMute.setOnAction(e -> {
-    // if (muteState == false) {
-    // btnMute_unMute.setGraphic(new ImageView(new
-    // Image(getClass().getResourceAsStream("no-audio.png"))));
+        // Volume
+        muteButton = new Button();
+        muteButton.setGraphic(getImage("mute.png"));
+        muteButton.setOnAction(e -> {
+            sliderVolume.setValue(0);
+            muteButton.setDisable(true);
+            unmuteButton.setDisable(false);
+        });
 
-    // if (player != null) {
-    // muteState = !muteState;
-    // player.setMute(true);
-    // System.out.println("you've been clicked in mute btn ");
-    // }
-    // } else {
-    // btnMute_unMute.setGraphic(new ImageView(new
-    // Image(getClass().getResourceAsStream("audio.png"))));
-    // if (player != null) {
-    // muteState = !muteState;
-    // player.setMute(false);
-    // }
+        unmuteButton = new Button();
+        unmuteButton.setGraphic(getImage("audio.png"));
+        unmuteButton.setOnAction(e -> {
+            sliderVolume.setValue(50);
+            muteButton.setDisable(false);
+            unmuteButton.setDisable(true);
+        });
 
-    // }
-    // });
-    // wrp_btnPlay_Pause.getChildren().addAll(btnPlay_Pause);
-    // wrp_btnPlay_Pause.setPadding(new Insets(10, 10, 15, 10));
+        sliderVolume = new Slider();
+        sliderVolume.valueProperty()
+                .addListener((ObservableValue<? extends Number> observable, Number oldValue, Number newValue) -> {
+                    player.setVolume(sliderVolume.getValue() / 100.0);
+                });
 
-    // HBox wrp_prev_stop_next = new HBox(3);
-    // wrp_prev_stop_next.getChildren().addAll(btn_Previous, btn_stop, btn_next);
-    // wrp_prev_stop_next.setPadding(new Insets(10, 10, 15, 10));
+        // ProgresBar
+        progressBar = new Slider();
+        progressBar.valueProperty()
+                .addListener((ObservableValue<? extends Number> observable, Number oldValue, Number newValue) -> {
+                    if (progressBar.isPressed()) {
+                        player.seek(player.getTotalDuration().multiply(progressBar.getValue() / 100.0));
+                    }
+                });
 
-    // HBox wrp_mute = new HBox();
+        HBox audioLayout = new HBox(3);
+        audioLayout.getChildren().addAll(muteButton, unmuteButton, sliderVolume);
+        audioLayout.setAlignment(Pos.CENTER);
 
-    // vol.setPadding(new Insets(0, 10, 10, 10));
-    // wrp_mute.getChildren().addAll(btnMute_unMute);
-    // wrp_mute.setPadding(new Insets(10, 0, 0, 10));
+        HBox container = new HBox(10);
+        container.getChildren().addAll(controleButtons, audioLayout);
+        container.setAlignment(Pos.CENTER);
 
-    // HBox wrp_volume = new HBox();
-    // wrp_volume.getChildren().add(vol);
-    // wrp_volume.setAlignment(Pos.CENTER);
+        bottomLayout = new VBox(10);
+        bottomLayout.setPadding(new Insets(20));
+        bottomLayout.setStyle("-fx-background-color: white");
+        bottomLayout.getChildren().addAll(progressBar, container);
 
-    // HBox container = new HBox();
-    // container.setStyle("-fx-background-color: white");
-    // container.getChildren().addAll(wrp_btnPlay_Pause, wrp_prev_stop_next,
-    // wrp_mute, wrp_volume);
-    // // timer.setPadding(new Insets(0,0,5,50));
-
-    // VBox vbox = new VBox();
-    // vbox.getChildren().addAll(time, container);
-    // root.setBottom(vbox);
-    // }
+        rootLayout.setBottom(bottomLayout);
+    }
 
     void createTopMenuBar() {
         // create all menu
@@ -259,41 +385,34 @@ public class App extends Application {
         media.getItems().addAll(openFile, openFiles, quit);
         // End Media Menu
 
-        // PlayBack
-        Menu playback = new Menu("Playback");
-
-        MenuItem play = new MenuItem("Play");
-        MenuItem stop = new MenuItem("Stop");
-        MenuItem previous = new MenuItem("Previous");
-        MenuItem next = new MenuItem("Next");
-
-        Menu speed = new Menu("Speed");
-        MenuItem faster = new MenuItem("Faster(CTR +)");
-        MenuItem normal = new MenuItem("Normal");
-        MenuItem slow = new MenuItem("Slow(CTR -)");
-        speed.getItems().addAll(faster, normal, slow);
-        playback.getItems().addAll(play, stop, new SeparatorMenuItem(), previous, next, new SeparatorMenuItem(), speed);
-
-        // Audio
-        Menu audio = new Menu("Audio");
-
-        MenuItem increaseVolume = new MenuItem("Increase Volume");
-        MenuItem decreaseVolume = new MenuItem("Decrease Volume");
-        MenuItem mute = new MenuItem("Mute");
-        audio.getItems().addAll(increaseVolume, decreaseVolume, mute);
-
         // Video
-        Menu video = new Menu("View");
+        Menu viewMenu = new Menu("View");
 
+        MenuItem playlistItem = new MenuItem("Playlist");
+        playlistItem.setOnAction(e -> {
+            rootLayout.setCenter(tableView);
+        });
+        MenuItem mediItem = new MenuItem("Media");
+        mediItem.setOnAction(e -> {
+            rootLayout.setCenter(mediaView);
+        });        
+        
         MenuItem fllScreen = new MenuItem("Full Screen (CTR+F)");
+        fllScreen.setOnAction(e -> {
+            stage.setFullScreen(true);
+        });
         MenuItem normalScreen = new MenuItem("Normal Screen (CTR+N)");
-        video.getItems().addAll(fllScreen, normalScreen);
+        normalScreen.setOnAction(e -> {
+            stage.setFullScreen(false);
+        });
+
+        viewMenu.getItems().addAll(playlistItem, mediItem, new SeparatorMenuItem(), fllScreen, normalScreen);
 
         // Settings
-        Menu settings = new Menu("Settings");
+        Menu settingsMenu = new Menu("Settings");
 
         MenuItem bgr = new MenuItem("Change background");
-        settings.getItems().add(bgr);
+        settingsMenu.getItems().add(bgr);
 
         ColorPicker colorPicker = new ColorPicker();
         colorPicker.setOnAction(e -> {
@@ -302,10 +421,16 @@ public class App extends Application {
         });
         bgr.setGraphic(colorPicker);
 
-        Menu help = new Menu("Help");
-        Menu about = new Menu("About");
-
-        menuBar.getMenus().addAll(media, playback, audio, video, settings, help, about);
+        Menu help = new Menu("Author");
+        help.getItems().addAll(
+            new MenuItem("Aliano CHARLES"),            
+            new MenuItem("Berthin PIERRISTAL"),
+            new MenuItem("Mackendy ALEXIS"),
+            new MenuItem("Jean Duckens Sanon"),
+            new MenuItem("Louis Midson LAJEANTY"),
+            new MenuItem("Rolbert APHAON")
+        );
+        menuBar.getMenus().addAll(media, viewMenu, settingsMenu, help);
         rootLayout.setTop(menuBar);
     }
 
